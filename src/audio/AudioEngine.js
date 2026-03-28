@@ -10,14 +10,16 @@ export class AudioEngine {
     this.ctx = new AudioContext({ sampleRate: 48000 });
 
     // Load worklet dependencies into AudioWorkletGlobalScope, then the processor.
-    // Order matters: fft.js and noise-shaper.js register on globalThis before
-    // dp-worklet.js references them.
+    // Order matters: fft.js, noise-shaper.js, and note-utils.js register on
+    // globalThis before dp-worklet.js references them.
     const fftUrl = new URL('./fft.js', import.meta.url).href;
     const shaperUrl = new URL('./noise-shaper.js', import.meta.url).href;
+    const noteUtilsUrl = new URL('./note-utils.js', import.meta.url).href;
     const workletUrl = new URL('./dp-worklet.js', import.meta.url).href;
 
     await this.ctx.audioWorklet.addModule(fftUrl);
     await this.ctx.audioWorklet.addModule(shaperUrl);
+    await this.ctx.audioWorklet.addModule(noteUtilsUrl);
     await this.ctx.audioWorklet.addModule(workletUrl);
 
     // Create nodes
@@ -49,9 +51,27 @@ export class AudioEngine {
     this.postToWorklet({ type: 'start' });
   }
 
-  setNoiseMode(mode) {
-    this.postToWorklet({ type: 'paramUpdate', param: 'noiseMode', value: mode });
+  // ---- Note control ----
+
+  noteOn(note, velocity = 127) {
+    this.postToWorklet({ type: 'noteOn', note, velocity });
   }
+
+  noteOff(note) {
+    this.postToWorklet({ type: 'noteOff', note });
+  }
+
+  // ---- Parameter control ----
+
+  setParam(param, value) {
+    this.postToWorklet({ type: 'paramUpdate', param, value });
+  }
+
+  setNoiseMode(mode) {
+    this.setParam('noiseMode', mode);
+  }
+
+  // ---- Transport ----
 
   startNoise() {
     this.postToWorklet({ type: 'start' });

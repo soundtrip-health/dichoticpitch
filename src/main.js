@@ -44,8 +44,28 @@ function showTransport(container) {
     audioEngine.setNoiseMode(newMode);
   });
 
+  // M4 test: toggle a ~500Hz DP note (MIDI 71 = B4 ≈ 494Hz)
+  const TEST_NOTE = 71;
+  let testNoteOn = false;
+  const testBtn = document.createElement('button');
+  testBtn.id = 'test-btn';
+  testBtn.textContent = 'Test 500Hz';
+  testBtn.addEventListener('click', () => {
+    testNoteOn = !testNoteOn;
+    if (testNoteOn) {
+      audioEngine.noteOn(TEST_NOTE);
+      testBtn.textContent = 'Stop 500Hz';
+      testBtn.classList.add('active');
+    } else {
+      audioEngine.noteOff(TEST_NOTE);
+      testBtn.textContent = 'Test 500Hz';
+      testBtn.classList.remove('active');
+    }
+  });
+
   container.appendChild(stopBtn);
   container.appendChild(modeBtn);
+  container.appendChild(testBtn);
 }
 
 document.addEventListener('DOMContentLoaded', init);
