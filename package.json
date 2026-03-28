@@ -1,0 +1,21 @@
+{
+  "name": "dichoticpitch",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --port 3000",
+    "build": "vite build",
+    "preview": "vite preview",
+    "server": "node server/index.js"
+  },
+  "dependencies": {
+    "dat.gui": "^0.7.9",
+    "express": "^4.21.0",
+    "fft.js": "^4.0.4",
+    "three": "^0.170.0"
+  },
+  "devDependencies": {
+    "vite": "^6.0.0"
+  }
+}
