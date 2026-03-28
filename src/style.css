@@ -80,8 +80,7 @@ html, body {
   gap: 8px;
 }
 
-#stop-btn,
-#mode-btn {
+#stop-btn {
   padding: 0.5rem 1.5rem;
   font-size: 0.9rem;
   border: 1px solid #444;
@@ -92,8 +91,7 @@ html, body {
   transition: border-color 0.2s, color 0.2s;
 }
 
-#stop-btn:hover,
-#mode-btn:hover {
+#stop-btn:hover {
   border-color: #7af;
   color: #7af;
 }
@@ -112,4 +110,36 @@ html, body {
   right: 0;
   height: 200px;
   z-index: 10;
+  background: linear-gradient(to top, rgba(10,10,15,0.9), transparent);
+}
+
+/* Piano keyboard SVG keys */
+.white-key {
+  fill: #e8e8e8;
+  stroke: #333;
+  stroke-width: 0.15;
+  cursor: pointer;
+}
+
+.white-key:hover {
+  fill: #d0d8e8;
+}
+
+.white-key.active {
+  fill: #7af;
+}
+
+.black-key {
+  fill: #1a1a1a;
+  stroke: #000;
+  stroke-width: 0.1;
+  cursor: pointer;
+}
+
+.black-key:hover {
+  fill: #2a2a3a;
+}
+
+.black-key.active {
+  fill: #58c;
 }
