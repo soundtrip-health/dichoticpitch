@@ -80,7 +80,8 @@ html, body {
   gap: 8px;
 }
 
-#stop-btn {
+#stop-btn,
+#mode-btn {
   padding: 0.5rem 1.5rem;
   font-size: 0.9rem;
   border: 1px solid #444;
@@ -91,7 +92,8 @@ html, body {
   transition: border-color 0.2s, color 0.2s;
 }
 
-#stop-btn:hover {
+#stop-btn:hover,
+#mode-btn:hover {
   border-color: #7af;
   color: #7af;
 }

@@ -9,8 +9,15 @@ export class AudioEngine {
   async init() {
     this.ctx = new AudioContext({ sampleRate: 48000 });
 
-    // Load the worklet processor
+    // Load worklet dependencies into AudioWorkletGlobalScope, then the processor.
+    // Order matters: fft.js and noise-shaper.js register on globalThis before
+    // dp-worklet.js references them.
+    const fftUrl = new URL('./fft.js', import.meta.url).href;
+    const shaperUrl = new URL('./noise-shaper.js', import.meta.url).href;
     const workletUrl = new URL('./dp-worklet.js', import.meta.url).href;
+
+    await this.ctx.audioWorklet.addModule(fftUrl);
+    await this.ctx.audioWorklet.addModule(shaperUrl);
     await this.ctx.audioWorklet.addModule(workletUrl);
 
     // Create nodes
@@ -40,6 +47,10 @@ export class AudioEngine {
 
     // Start noise generation
     this.postToWorklet({ type: 'start' });
+  }
+
+  setNoiseMode(mode) {
+    this.postToWorklet({ type: 'paramUpdate', param: 'noiseMode', value: mode });
   }
 
   startNoise() {

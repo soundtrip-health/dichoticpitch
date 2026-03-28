@@ -13,7 +13,7 @@ async function init() {
       await audioEngine.init();
       overlay.classList.add('hidden');
       showTransport(transportBar);
-      console.log('AudioEngine initialized — white noise playing');
+      console.log('AudioEngine initialized — shaped noise playing');
     } catch (err) {
       console.error('Failed to initialize audio:', err);
     }
@@ -33,7 +33,19 @@ function showTransport(container) {
       stopBtn.textContent = 'Stop';
     }
   });
+
+  const modeBtn = document.createElement('button');
+  modeBtn.id = 'mode-btn';
+  modeBtn.textContent = 'Rain';
+  modeBtn.addEventListener('click', () => {
+    const isRain = modeBtn.textContent === 'Rain';
+    const newMode = isRain ? 'waterfall' : 'rain';
+    modeBtn.textContent = isRain ? 'Waterfall' : 'Rain';
+    audioEngine.setNoiseMode(newMode);
+  });
+
   container.appendChild(stopBtn);
+  container.appendChild(modeBtn);
 }
 
 document.addEventListener('DOMContentLoaded', init);
