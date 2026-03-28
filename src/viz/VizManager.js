@@ -1,7 +1,9 @@
 import * as THREE from 'three';
-import { createSpectrumPlane } from './geometries.js';
+import { createSpectrumPlane, createRingGeometry } from './geometries.js';
 import spectrumVert from './shaders/spectrum.vert?raw';
 import spectrumFrag from './shaders/spectrum.frag?raw';
+import waveformVert from './shaders/waveform.vert?raw';
+import waveformFrag from './shaders/waveform.frag?raw';
 import { SAMPLE_RATE, FFT_SIZE } from '../utils/constants.js';
 
 // NoteUtils for main thread — mirrors worklet's note-utils.js
@@ -28,6 +30,12 @@ export class VizManager {
     // Byte arrays for frequency data
     this.freqDataL = new Uint8Array(this.freqBinCount);
     this.freqDataR = new Uint8Array(this.freqBinCount);
+
+    // Byte arrays for time-domain data (interaural difference ring)
+    this.timeBinCount = audioEngine.analyserL.fftSize;
+    this.timeDataL = new Uint8Array(this.timeBinCount);
+    this.timeDataR = new Uint8Array(this.timeBinCount);
+    this.diffData = new Uint8Array(this.timeBinCount);
 
     // Three.js setup
     this.renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
@@ -75,6 +83,11 @@ export class VizManager {
     // Labels (using sprite text)
     this._addLabel('L', -0.92, 0.7, 0.3, 0.5, 0.9);
     this._addLabel('R', -0.92, -0.7, 0.9, 0.4, 0.5);
+
+    // Interaural difference ring
+    this.diffTex = this._createDiffTexture();
+    this.ringMesh = this._createRingMesh();
+    this.scene.add(this.ringMesh);
 
     // Clock for shader time uniform
     this.clock = new THREE.Clock();
@@ -143,6 +156,61 @@ export class VizManager {
     this.scene.add(sprite);
   }
 
+  /** Create a DataTexture for the interaural difference waveform */
+  _createDiffTexture() {
+    const data = new Uint8Array(this.timeBinCount);
+    data.fill(128); // centered (no difference)
+    const tex = new THREE.DataTexture(data, this.timeBinCount, 1, THREE.RedFormat);
+    tex.minFilter = THREE.LinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.needsUpdate = true;
+    return tex;
+  }
+
+  /** Create the interaural difference ring mesh */
+  _createRingMesh() {
+    const geo = createRingGeometry(0.22, 0.02, 256);
+    const mat = new THREE.ShaderMaterial({
+      vertexShader: waveformVert,
+      fragmentShader: waveformFrag,
+      transparent: true,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      uniforms: {
+        uDiffData: { value: this.diffTex },
+        uAmplitude: { value: 0.15 },
+        uTime: { value: 0 },
+        uActivity: { value: 0 },
+        uColorQuiet: { value: new THREE.Color(0.25, 0.3, 0.4) },
+        uColorActive: { value: new THREE.Color(0.5, 0.9, 1.0) },
+      },
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.z = 0.02; // in front of spectrum bars
+    return mesh;
+  }
+
+  /** Compute L-R difference and update the diff texture */
+  _updateDiffRing() {
+    this.audioEngine.analyserL.getByteTimeDomainData(this.timeDataL);
+    this.audioEngine.analyserR.getByteTimeDomainData(this.timeDataR);
+
+    for (let i = 0; i < this.timeBinCount; i++) {
+      // Both are 0-255 centered at 128; difference centered at 128
+      const diff = (this.timeDataL[i] - this.timeDataR[i]) * 0.5 + 128;
+      this.diffData[i] = Math.max(0, Math.min(255, diff | 0));
+    }
+
+    this.diffTex.image.data.set(this.diffData);
+    this.diffTex.needsUpdate = true;
+
+    // Activity level: smoothed from active notes count
+    const hasNotes = this.audioEngine.activeNotes.size > 0 ? 1.0 : 0.0;
+    const current = this.ringMesh.material.uniforms.uActivity.value;
+    // Smooth towards target (~60ms at 60fps)
+    this.ringMesh.material.uniforms.uActivity.value += (hasNotes - current) * 0.15;
+  }
+
   /** Update active note band uniforms from audioEngine.activeNotes */
   _updateNoteBands() {
     const notes = this.audioEngine.activeNotes;
@@ -180,10 +248,14 @@ export class VizManager {
     // Update note band uniforms
     this._updateNoteBands();
 
+    // Update interaural difference ring
+    this._updateDiffRing();
+
     // Update time
     const t = this.clock.getElapsedTime();
     this.meshL.material.uniforms.uTime.value = t;
     this.meshR.material.uniforms.uTime.value = t;
+    this.ringMesh.material.uniforms.uTime.value = t;
 
     // Render
     this.renderer.render(this.scene, this.camera);
