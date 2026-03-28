@@ -35,7 +35,7 @@ export class ParamPanel {
     spatial.open();
 
     const master = this.gui.addFolder('Master');
-    master.add(this.params, 'noiseMode', ['rain', 'waterfall']).name('Noise Mode').onChange(v => this._change('noiseMode', v));
+    master.add(this.params, 'noiseMode', ['rain', 'waterfall', 'wind', 'stream']).name('Noise Mode').onChange(v => this._change('noiseMode', v));
     master.add(this.params, 'masterGain', 0, 1, 0.01).name('Volume').onChange(v => this._change('masterGain', v));
     master.open();
   }

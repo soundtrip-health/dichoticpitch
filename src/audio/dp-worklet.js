@@ -97,6 +97,19 @@ class DPProcessor extends AudioWorkletProcessor {
       this.noiseMode, FFT_SIZE, sampleRate
     );
 
+    // ---- Block-rate noise modulation ----
+    this.noiseMod = new globalThis.NoiseMod(FFT_SIZE, sampleRate);
+    this.modTilt = new Float64Array(HALF_N + 1);
+
+    // ---- Transient voice pool (8 voices, SoA layout) ----
+    const NUM_VOICES = 8;
+    this.numVoices = NUM_VOICES;
+    this.trActive = new Uint8Array(NUM_VOICES);
+    this.trFreq = new Float64Array(NUM_VOICES);
+    this.trPhase = new Float64Array(NUM_VOICES);
+    this.trAmp = new Float64Array(NUM_VOICES);
+    this.trDecay = new Float64Array(NUM_VOICES);
+
     // Build initial masks (no notes → pure shaped noise)
     this._buildMasks();
 
@@ -151,6 +164,7 @@ class DPProcessor extends AudioWorkletProcessor {
             this.tilt = globalThis.NoiseShaper.buildTiltArray(
               value, FFT_SIZE, sampleRate
             );
+            this.noiseMod.setMode(value);
             break;
         }
         break;
@@ -248,8 +262,7 @@ class DPProcessor extends AudioWorkletProcessor {
   // Spectrum generation: tilt-shaped amplitude × mask, random phases
   // ------------------------------------------------------------------
 
-  _fillSpectrum(spec, mask) {
-    const tilt = this.tilt;
+  _fillSpectrum(spec, mask, tilt) {
 
     // DC = 0
     spec[0] = 0;
@@ -277,13 +290,85 @@ class DPProcessor extends AudioWorkletProcessor {
   }
 
   // ------------------------------------------------------------------
+  // Transient voice pool: droplets (rain) and bubble pops (stream)
+  // ------------------------------------------------------------------
+
+  _triggerTransients() {
+    let prob, freqLo, freqHi, decayMsLo, decayMsHi, ampLo, ampHi;
+    switch (this.noiseMode) {
+      case 'rain':
+        prob = 0.05; freqLo = 2000; freqHi = 8000;
+        decayMsLo = 5; decayMsHi = 15; ampLo = 0.02; ampHi = 0.06;
+        break;
+      case 'stream':
+        prob = 0.08; freqLo = 500; freqHi = 3000;
+        decayMsLo = 10; decayMsHi = 30; ampLo = 0.03; ampHi = 0.08;
+        break;
+      default:
+        return; // no transients for other modes
+    }
+
+    if (Math.random() >= prob) return;
+
+    // Find a free voice slot
+    for (let v = 0; v < this.numVoices; v++) {
+      if (!this.trActive[v]) {
+        this.trActive[v] = 1;
+        this.trFreq[v] = freqLo + Math.random() * (freqHi - freqLo);
+        this.trPhase[v] = Math.random() * TWO_PI;
+        this.trAmp[v] = ampLo + Math.random() * (ampHi - ampLo);
+        const decayMs = decayMsLo + Math.random() * (decayMsHi - decayMsLo);
+        this.trDecay[v] = Math.exp(-1 / (decayMs / 1000 * sampleRate));
+        return;
+      }
+    }
+    // All voices busy — skip this trigger
+  }
+
+  _renderTransients() {
+    const rL = this.ringL;
+    const rR = this.ringR;
+    const wp = this.writePos;
+
+    for (let v = 0; v < this.numVoices; v++) {
+      if (!this.trActive[v]) continue;
+
+      let phase = this.trPhase[v];
+      let amp = this.trAmp[v];
+      const freq = this.trFreq[v];
+      const decay = this.trDecay[v];
+      const phaseInc = TWO_PI * freq / sampleRate;
+
+      for (let i = 0; i < HOP_SIZE; i++) {
+        const val = amp * Math.sin(phase);
+        const idx = (wp + i) % RING_SIZE;
+        // Diotic: same signal in both ears (external sound source)
+        rL[idx] += val;
+        rR[idx] += val;
+        phase += phaseInc;
+        amp *= decay;
+      }
+
+      // Wrap phase to avoid precision loss
+      this.trPhase[v] = phase % TWO_PI;
+      this.trAmp[v] = amp;
+
+      // Deactivate if decayed below threshold
+      if (amp < 1e-6) {
+        this.trActive[v] = 0;
+      }
+    }
+  }
+
+  // ------------------------------------------------------------------
   // Block generation: the full DP pipeline
   // ------------------------------------------------------------------
 
   _generateBlock() {
-    // 1. Generate sig and back spectra (tilt × mask applied)
-    this._fillSpectrum(this.specSig, this.sigMask);
-    this._fillSpectrum(this.specBack, this.backMask);
+    // 1. Modulate tilt for this block, then generate sig and back spectra
+    this.noiseMod.getModulatedTilt(this.tilt, this.modTilt);
+    this._fillSpectrum(this.specSig, this.sigMask, this.modTilt);
+    this._fillSpectrum(this.specBack, this.backMask, this.modTilt);
 
     // 2. IFFT → time domain
     this.fft.inverseTransform(this.timeSig, this.specSig);
@@ -336,6 +421,10 @@ class DPProcessor extends AudioWorkletProcessor {
         rR[olaIdx] + (sigShifted * toneRGain + backShifted * bgRGain) * w
       );
     }
+
+    // 6. Stochastic transients (droplets / bubble pops)
+    this._triggerTransients();
+    this._renderTransients();
   }
 
   // ------------------------------------------------------------------
