@@ -3,8 +3,7 @@
  *
  * M4: Full DP pipeline — frequency-domain noise generation, bandpass masks
  * M7: Independent equal-power panning for tone (sig) and background.
- *     with SBR scaling + folded renormalization, IFFT, per-ear circular
- *     time shifts, Hann-windowed overlap-add, spectral LPF.
+ * M9: 20ms parameter ramping, denormal protection, soft limiter (-1dB).
  *
  * Algorithm (matches Matlab dichoticPitch.m):
  *   [freq]  sig  = tilt-shaped random spectrum
@@ -28,20 +27,41 @@ const RING_SIZE = FFT_SIZE * 2;  // 4096 — room for one full overlap cycle
 const TWO_PI = 2 * Math.PI;
 const HALF_N = FFT_SIZE / 2;
 
+// Soft limiter threshold: -1 dBFS ≈ 0.891
+const LIMITER_THRESH = Math.pow(10, -1 / 20);
+
+// Denormal protection: values below this are flushed to zero
+const DENORMAL_THRESH = 1e-15;
+
 class DPProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
     this.running = false;
 
-    // ---- DSP parameters ----
+    // ---- DSP parameters (smoothed current values) ----
     this.sbr = 1.0;
     this.tsSigMs = 0.6;
     this.tsBackMs = 0.0;
     this.lpfCutoff = 10000;
     this.amplitude = 0.3;
     this.noiseMode = 'rain';
-    this.tonePan = 0.0;     // [-1, 1] panning for tone (sig)
-    this.bgPan = 0.0;       // [-1, 1] panning for background
+    this.tonePan = 0.0;
+    this.bgPan = 0.0;
+
+    // ---- Smoothing targets (set by incoming messages) ----
+    this.sbrTarget = 1.0;
+    this.tsSigMsTarget = 0.6;
+    this.tsBackMsTarget = 0.0;
+    this.lpfCutoffTarget = 10000;
+    this.amplitudeTarget = 0.3;
+    this.tonePanTarget = 0.0;
+    this.bgPanTarget = 0.0;
+
+    // ---- Smoothing coefficients ----
+    // Per-quantum (~2.7ms at 48kHz): ~7 steps to reach 20ms time constant
+    this.smoothCoeff = 1 - Math.exp(-QUANTUM / (0.02 * sampleRate));
+    // Per-sample smoothing for amplitude (click-free gain changes)
+    this.ampSmoothCoeff = 1 - Math.exp(-1 / (0.02 * sampleRate));
 
     // ---- Active notes (MIDI → { freq, lowBin, highBin }) ----
     this.activeNotes = new Map();
@@ -119,13 +139,13 @@ class DPProcessor extends AudioWorkletProcessor {
       case 'paramUpdate': {
         const { param, value } = e.data;
         switch (param) {
-          case 'sbr':        this.sbr = value; break;
-          case 'tsSigMs':    this.tsSigMs = value; break;
-          case 'tsBackMs':   this.tsBackMs = value; break;
-          case 'lpfCutoff':  this.lpfCutoff = value; break;
-          case 'masterGain': this.amplitude = value; break;
-          case 'tonePan':    this.tonePan = value; break;
-          case 'bgPan':      this.bgPan = value; break;
+          case 'sbr':        this.sbrTarget = value; break;
+          case 'tsSigMs':    this.tsSigMsTarget = value; break;
+          case 'tsBackMs':   this.tsBackMsTarget = value; break;
+          case 'lpfCutoff':  this.lpfCutoffTarget = value; break;
+          case 'masterGain': this.amplitudeTarget = value; break;
+          case 'tonePan':    this.tonePanTarget = value; break;
+          case 'bgPan':      this.bgPanTarget = value; break;
           case 'noiseMode':
             this.noiseMode = value;
             this.tilt = globalThis.NoiseShaper.buildTiltArray(
@@ -133,13 +153,57 @@ class DPProcessor extends AudioWorkletProcessor {
             );
             break;
         }
-        // Rebuild masks when shape-affecting params change
-        if (param === 'sbr' || param === 'lpfCutoff') {
-          this._buildMasks();
-        }
         break;
       }
     }
+  }
+
+  // ------------------------------------------------------------------
+  // Parameter smoothing — one-pole exponential, per quantum (~2.7ms)
+  // ------------------------------------------------------------------
+
+  _smoothParams() {
+    const c = this.smoothCoeff;
+    let masksNeedRebuild = false;
+
+    // Smooth spectral-shape params; check if they moved enough to warrant mask rebuild
+    const prevSbr = this.sbr;
+    const prevLpf = this.lpfCutoff;
+    this.sbr += c * (this.sbrTarget - this.sbr);
+    this.tsSigMs += c * (this.tsSigMsTarget - this.tsSigMs);
+    this.tsBackMs += c * (this.tsBackMsTarget - this.tsBackMs);
+    this.lpfCutoff += c * (this.lpfCutoffTarget - this.lpfCutoff);
+    this.tonePan += c * (this.tonePanTarget - this.tonePan);
+    this.bgPan += c * (this.bgPanTarget - this.bgPan);
+
+    // Rebuild masks only when sbr or lpfCutoff changed appreciably
+    if (Math.abs(this.sbr - prevSbr) > 1e-6 ||
+        Math.abs(this.lpfCutoff - prevLpf) > 0.5) {
+      masksNeedRebuild = true;
+    }
+
+    return masksNeedRebuild;
+  }
+
+  // ------------------------------------------------------------------
+  // Soft limiter: tanh-based saturation at -1 dBFS
+  // ------------------------------------------------------------------
+
+  static _softLimit(x) {
+    if (x > LIMITER_THRESH) {
+      return LIMITER_THRESH * Math.tanh(x / LIMITER_THRESH);
+    } else if (x < -LIMITER_THRESH) {
+      return -LIMITER_THRESH * Math.tanh(-x / LIMITER_THRESH);
+    }
+    return x;
+  }
+
+  // ------------------------------------------------------------------
+  // Denormal protection: flush tiny values to zero
+  // ------------------------------------------------------------------
+
+  static _flushDenormal(x) {
+    return (x > DENORMAL_THRESH || x < -DENORMAL_THRESH) ? x : 0;
   }
 
   // ------------------------------------------------------------------
@@ -264,9 +328,13 @@ class DPProcessor extends AudioWorkletProcessor {
 
       // Left ear: unshifted sig/back, panned
       // Right ear: circShifted sig/back, panned
-      // Both Hann-windowed for OLA
-      rL[olaIdx] += (sigI * toneLGain + backI * bgLGain) * w;
-      rR[olaIdx] += (sigShifted * toneRGain + backShifted * bgRGain) * w;
+      // Both Hann-windowed for OLA, with denormal protection
+      rL[olaIdx] = DPProcessor._flushDenormal(
+        rL[olaIdx] + (sigI * toneLGain + backI * bgLGain) * w
+      );
+      rR[olaIdx] = DPProcessor._flushDenormal(
+        rR[olaIdx] + (sigShifted * toneRGain + backShifted * bgRGain) * w
+      );
     }
   }
 
@@ -284,19 +352,29 @@ class DPProcessor extends AudioWorkletProcessor {
       return true;
     }
 
-    const amp = this.amplitude;
+    // Smooth parameters per quantum
+    const masksNeedRebuild = this._smoothParams();
+    if (masksNeedRebuild) this._buildMasks();
+
     const rp = this.readPos;
     const rL = this.ringL;
     const rR = this.ringR;
+    const alphaAmp = this.ampSmoothCoeff;
+    let amp = this.amplitude;
+    const ampTarget = this.amplitudeTarget;
 
-    // Read from ring buffer and clear consumed samples
+    // Read from ring buffer with per-sample amplitude smoothing + soft limiter
     for (let i = 0; i < QUANTUM; i++) {
+      // Per-sample amplitude ramp (click-free gain changes)
+      amp += alphaAmp * (ampTarget - amp);
+
       const idx = (rp + i) % RING_SIZE;
-      outL[i] = rL[idx] * amp;
-      outR[i] = rR[idx] * amp;
+      outL[i] = DPProcessor._softLimit(rL[idx] * amp);
+      outR[i] = DPProcessor._softLimit(rR[idx] * amp);
       rL[idx] = 0;
       rR[idx] = 0;
     }
+    this.amplitude = amp;
     this.readPos = (rp + QUANTUM) % RING_SIZE;
 
     // Every HOP_SIZE samples (8 quanta), generate the next block
