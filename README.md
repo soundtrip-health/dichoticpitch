@@ -1,8 +1,21 @@
-# Dichotic Pitch Generator
+# Dichotic Pitch Generator Webapp
 
-Matlab/Octave code to generate dichotic pitch stimuli. 
+This project is evolving from legacy Matlab/Octave stimulus-generation scripts into an interactive webapp for creating dichotic pitch (DP) tunes live.
 
-To quickly hear some demos, grab your headphones and checkout the [demos](./demos) directory. See below for a brief introduction to the phenomenon.
+The goal is a browser-based instrument where users can play a piano keyboard UI and hear/edit dichotic pitch notes and phrases in real time.
+
+To quickly hear some canned examples, grab your headphones and check out the [demos](./demos) directory. The original Matlab/Octave implementation and notes are in [src_matlab](./src_matlab/).
+
+## Webapp Vision
+
+- Live DP tune creation from a piano keyboard interface
+- Real-time audio synthesis based on the existing dichotic pitch algorithms
+- User controls for core stimulus parameters (for example, SBR and tuning choices)
+- Browser-first experience for experimentation, education, and perceptual demos
+
+## Legacy Matlab Code
+
+`src_matlab` contains the original Matlab/Octave code that the webapp implementation will be based on.
 
 ## Background
 
