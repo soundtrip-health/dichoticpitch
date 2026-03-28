@@ -37,6 +37,17 @@ export class AudioEngine {
     }
 
     console.log(`AudioContext: ${this.ctx.sampleRate}Hz, state=${this.ctx.state}`);
+
+    // Start noise generation
+    this.postToWorklet({ type: 'start' });
+  }
+
+  startNoise() {
+    this.postToWorklet({ type: 'start' });
+  }
+
+  stopNoise() {
+    this.postToWorklet({ type: 'stop' });
   }
 
   /** Send a message to the worklet via its MessagePort */
