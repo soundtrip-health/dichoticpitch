@@ -1,7 +1,9 @@
 import { AudioEngine } from './audio/AudioEngine.js';
 import { UIManager } from './ui/UIManager.js';
+import { VizManager } from './viz/VizManager.js';
 
 let audioEngine = null;
+let vizManager = null;
 
 async function init() {
   const overlay = document.getElementById('start-overlay');
@@ -16,11 +18,24 @@ async function init() {
       // Wire up all UI controls
       new UIManager(audioEngine);
 
-      console.log('AudioEngine initialized — UI ready');
+      // Start visualization
+      const canvas = document.getElementById('viz-canvas');
+      vizManager = new VizManager(canvas, audioEngine);
+      startRenderLoop();
+
+      console.log('AudioEngine initialized — UI + Viz ready');
     } catch (err) {
       console.error('Failed to initialize audio:', err);
     }
   });
+}
+
+function startRenderLoop() {
+  function frame() {
+    if (vizManager) vizManager.update();
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
 }
 
 document.addEventListener('DOMContentLoaded', init);

@@ -4,6 +4,9 @@ export class AudioEngine {
     this.workletNode = null;
     this.gainNode = null;
     this.analyser = null;
+    this.analyserL = null;
+    this.analyserR = null;
+    this.activeNotes = new Set();
   }
 
   async init() {
@@ -35,10 +38,24 @@ export class AudioEngine {
     this.analyser = this.ctx.createAnalyser();
     this.analyser.fftSize = 2048;
 
+    // Per-channel analysers for L/R visualization
+    this.analyserL = this.ctx.createAnalyser();
+    this.analyserL.fftSize = 2048;
+    this.analyserL.smoothingTimeConstant = 0.8;
+    this.analyserR = this.ctx.createAnalyser();
+    this.analyserR.fftSize = 2048;
+    this.analyserR.smoothingTimeConstant = 0.8;
+
+    const splitter = this.ctx.createChannelSplitter(2);
+
     // Connect graph: worklet → gain → analyser → destination
+    //                          gain → splitter → analyserL / analyserR
     this.workletNode.connect(this.gainNode);
     this.gainNode.connect(this.analyser);
     this.analyser.connect(this.ctx.destination);
+    this.gainNode.connect(splitter);
+    splitter.connect(this.analyserL, 0);
+    splitter.connect(this.analyserR, 1);
 
     // Resume context (autoplay policy)
     if (this.ctx.state === 'suspended') {
@@ -54,10 +71,12 @@ export class AudioEngine {
   // ---- Note control ----
 
   noteOn(note, velocity = 127) {
+    this.activeNotes.add(note);
     this.postToWorklet({ type: 'noteOn', note, velocity });
   }
 
   noteOff(note) {
+    this.activeNotes.delete(note);
     this.postToWorklet({ type: 'noteOff', note });
   }
 
