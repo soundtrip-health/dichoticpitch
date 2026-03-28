@@ -13,6 +13,8 @@ export class ParamPanel {
       tsSigMs: DEFAULTS.tsSigMs,
       tsBackMs: DEFAULTS.tsBackMs,
       lpfCutoff: DEFAULTS.lpfCutoff,
+      tonePan: DEFAULTS.tonePan,
+      bgPan: DEFAULTS.bgPan,
       noiseMode: DEFAULTS.noiseMode,
       masterGain: DEFAULTS.masterGain,
     };
@@ -26,6 +28,11 @@ export class ParamPanel {
     dsp.add(this.params, 'tsBackMs', -1, 1, 0.01).name('Back Shift (ms)').onChange(v => this._change('tsBackMs', v));
     dsp.add(this.params, 'lpfCutoff', 1000, 20000, 100).name('LPF Cutoff').onChange(v => this._change('lpfCutoff', v));
     dsp.open();
+
+    const spatial = this.gui.addFolder('Spatial');
+    spatial.add(this.params, 'tonePan', -1, 1, 0.01).name('Tone Pan').onChange(v => this._change('tonePan', v));
+    spatial.add(this.params, 'bgPan', -1, 1, 0.01).name('Background Pan').onChange(v => this._change('bgPan', v));
+    spatial.open();
 
     const master = this.gui.addFolder('Master');
     master.add(this.params, 'noiseMode', ['rain', 'waterfall']).name('Noise Mode').onChange(v => this._change('noiseMode', v));

@@ -2,6 +2,7 @@
  * Dichotic Pitch AudioWorkletProcessor
  *
  * M4: Full DP pipeline — frequency-domain noise generation, bandpass masks
+ * M7: Independent equal-power panning for tone (sig) and background.
  *     with SBR scaling + folded renormalization, IFFT, per-ear circular
  *     time shifts, Hann-windowed overlap-add, spectral LPF.
  *
@@ -39,6 +40,8 @@ class DPProcessor extends AudioWorkletProcessor {
     this.lpfCutoff = 10000;
     this.amplitude = 0.3;
     this.noiseMode = 'rain';
+    this.tonePan = 0.0;     // [-1, 1] panning for tone (sig)
+    this.bgPan = 0.0;       // [-1, 1] panning for background
 
     // ---- Active notes (MIDI → { freq, lowBin, highBin }) ----
     this.activeNotes = new Map();
@@ -121,6 +124,8 @@ class DPProcessor extends AudioWorkletProcessor {
           case 'tsBackMs':   this.tsBackMs = value; break;
           case 'lpfCutoff':  this.lpfCutoff = value; break;
           case 'masterGain': this.amplitude = value; break;
+          case 'tonePan':    this.tonePan = value; break;
+          case 'bgPan':      this.bgPan = value; break;
           case 'noiseMode':
             this.noiseMode = value;
             this.tilt = globalThis.NoiseShaper.buildTiltArray(
@@ -224,7 +229,17 @@ class DPProcessor extends AudioWorkletProcessor {
     const tsSigSamp = Math.round(this.tsSigMs / 1000 * sampleRate);
     const tsBackSamp = Math.round(this.tsBackMs / 1000 * sampleRate);
 
-    // 4. Hann window + OLA accumulate with per-ear time shifts
+    // 4. Equal-power panning gains for tone (sig) and background
+    //    pan in [-1,1] → angle in [0, π/2]; gainL = cos(θ), gainR = sin(θ)
+    const QUARTER_PI = Math.PI * 0.25;
+    const toneAngle = (this.tonePan + 1) * QUARTER_PI;
+    const toneLGain = Math.cos(toneAngle);
+    const toneRGain = Math.sin(toneAngle);
+    const bgAngle = (this.bgPan + 1) * QUARTER_PI;
+    const bgLGain = Math.cos(bgAngle);
+    const bgRGain = Math.sin(bgAngle);
+
+    // 5. Hann window + OLA accumulate with per-ear time shifts + panning
     const wp = this.writePos;
     const hann = this.hann;
     const rL = this.ringL;
@@ -247,11 +262,11 @@ class DPProcessor extends AudioWorkletProcessor {
       const sigShifted = tS[sigShiftIdx * 2];
       const backShifted = tB[backShiftIdx * 2];
 
-      // Left ear = sig + back (unshifted)
-      // Right ear = circShift(sig, tsSig) + circShift(back, tsBack)
+      // Left ear: unshifted sig/back, panned
+      // Right ear: circShifted sig/back, panned
       // Both Hann-windowed for OLA
-      rL[olaIdx] += (sigI + backI) * w;
-      rR[olaIdx] += (sigShifted + backShifted) * w;
+      rL[olaIdx] += (sigI * toneLGain + backI * bgLGain) * w;
+      rR[olaIdx] += (sigShifted * toneRGain + backShifted * bgRGain) * w;
     }
   }
 
