@@ -1,3 +1,5 @@
+const VIZ_BINS = 128;
+
 export class AudioEngine {
   constructor() {
     this.ctx = null;
@@ -7,6 +9,12 @@ export class AudioEngine {
     this.analyserL = null;
     this.analyserR = null;
     this.activeNotes = new Set();
+
+    // Viz spectral data (filled by worklet postMessage)
+    this.vizSig = new Float32Array(VIZ_BINS);
+    this.vizBack = new Float32Array(VIZ_BINS);
+    this.vizNoteCount = 0;
+    this.vizLpfCutoff = 10000;
   }
 
   async init() {
@@ -31,6 +39,16 @@ export class AudioEngine {
       numberOfOutputs: 1,
       outputChannelCount: [2],
     });
+
+    // Receive viz spectra from the worklet
+    this.workletNode.port.onmessage = (e) => {
+      if (e.data.type === 'vizSpectra') {
+        this.vizSig.set(e.data.sig);
+        this.vizBack.set(e.data.back);
+        this.vizNoteCount = e.data.noteCount;
+        this.vizLpfCutoff = e.data.lpfCutoff;
+      }
+    };
 
     this.gainNode = this.ctx.createGain();
     this.gainNode.gain.value = 0.7;

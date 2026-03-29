@@ -26,6 +26,8 @@ const QUANTA_PER_BLOCK = HOP_SIZE / QUANTUM; // 8
 const RING_SIZE = FFT_SIZE * 2;  // 4096 — room for one full overlap cycle
 const TWO_PI = 2 * Math.PI;
 const HALF_N = FFT_SIZE / 2;
+const VIZ_BINS = 128;            // decimated bin count for visualization
+const BINS_PER_VIZ = HALF_N / VIZ_BINS; // 8 source bins per viz bin
 
 // Soft limiter threshold: -1 dBFS ≈ 0.891
 const LIMITER_THRESH = Math.pow(10, -1 / 20);
@@ -109,6 +111,11 @@ class DPProcessor extends AudioWorkletProcessor {
     this.trPhase = new Float64Array(NUM_VOICES);
     this.trAmp = new Float64Array(NUM_VOICES);
     this.trDecay = new Float64Array(NUM_VOICES);
+
+    // ---- Viz spectral export (decimated to VIZ_BINS) ----
+    this.vizSig = new Float32Array(VIZ_BINS);
+    this.vizBack = new Float32Array(VIZ_BINS);
+    this.vizPeak = 1e-6; // running peak for normalization (slow decay)
 
     // Build initial masks (no notes → pure shaped noise)
     this._buildMasks();
@@ -361,6 +368,56 @@ class DPProcessor extends AudioWorkletProcessor {
   }
 
   // ------------------------------------------------------------------
+  // Viz spectral export: decimate sig/back magnitudes to VIZ_BINS
+  // Called after _fillSpectrum, before IFFT destroys freq data.
+  // ------------------------------------------------------------------
+
+  _computeVizSpectra() {
+    const sig = this.specSig;
+    const back = this.specBack;
+    const vSig = this.vizSig;
+    const vBack = this.vizBack;
+    let blockPeak = 0;
+
+    for (let v = 0; v < VIZ_BINS; v++) {
+      const base = (v * BINS_PER_VIZ + 1) * 2; // skip DC (bin 0)
+      let maxS = 0, maxB = 0;
+      for (let j = 0; j < BINS_PER_VIZ; j++) {
+        const idx = base + j * 2;
+        const re_s = sig[idx], im_s = sig[idx + 1];
+        const re_b = back[idx], im_b = back[idx + 1];
+        const magS = re_s * re_s + im_s * im_s; // squared mag (avoid sqrt)
+        const magB = re_b * re_b + im_b * im_b;
+        if (magS > maxS) maxS = magS;
+        if (magB > maxB) maxB = magB;
+      }
+      // sqrt here (once per viz bin, not per source bin)
+      maxS = Math.sqrt(maxS);
+      maxB = Math.sqrt(maxB);
+      vSig[v] = maxS;
+      vBack[v] = maxB;
+      if (maxS > blockPeak) blockPeak = maxS;
+      if (maxB > blockPeak) blockPeak = maxB;
+    }
+
+    // Adaptive peak with slow decay (prevents flicker)
+    this.vizPeak = Math.max(blockPeak, this.vizPeak * 0.995);
+    const invPeak = 1 / this.vizPeak;
+    for (let v = 0; v < VIZ_BINS; v++) {
+      vSig[v] *= invPeak;
+      vBack[v] *= invPeak;
+    }
+
+    this.port.postMessage({
+      type: 'vizSpectra',
+      sig: this.vizSig,
+      back: this.vizBack,
+      noteCount: this.activeNotes.size,
+      lpfCutoff: this.lpfCutoff,
+    });
+  }
+
+  // ------------------------------------------------------------------
   // Block generation: the full DP pipeline
   // ------------------------------------------------------------------
 
@@ -369,6 +426,9 @@ class DPProcessor extends AudioWorkletProcessor {
     this.noiseMod.getModulatedTilt(this.tilt, this.modTilt);
     this._fillSpectrum(this.specSig, this.sigMask, this.modTilt);
     this._fillSpectrum(this.specBack, this.backMask, this.modTilt);
+
+    // 1b. Export decimated spectra for viz (before IFFT destroys freq data)
+    this._computeVizSpectra();
 
     // 2. IFFT → time domain
     this.fft.inverseTransform(this.timeSig, this.specSig);
